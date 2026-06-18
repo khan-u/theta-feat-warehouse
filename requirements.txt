@@ -1,0 +1,23 @@
+# Core pipeline. numpy and pandas are held below their latest majors: the
+# real-data ingestion path (bycycle) needs the writable-array behaviour that
+# pandas 3.0 removed. The whole stack is validated together on Python 3.11.
+duckdb>=1.1.0
+numpy>=1.26,<2.1
+pandas>=2.1,<3
+PyYAML>=6.0
+
+# Real-data ingestion: read SBCAT (DANDI 000673, Daume et al.) NWB LFP and
+# reproduce eeg-feat-ext's bycycle extraction. Not needed for the synthetic
+# `make demo` path.
+pynwb>=2.5
+h5py>=3.9
+bycycle>=1.0
+neurodsp>=2.2
+
+# Orchestration (not needed for the CLI path). Airflow 2.x supports Python
+# 3.10-3.12; the recommended environment for the full stack is Python 3.11.
+apache-airflow>=2.9,<3.0
+
+# Development
+pytest>=8.0
+scipy>=1.11

@@ -1,0 +1,44 @@
+# Pipeline configuration.
+#
+# Signal and threshold values mirror src/RunBycycle.py in eeg-feat-ext. They are
+# repeated here so the warehouse can record, and assert on, the parameters the
+# features it aggregates were produced under. Change them here if the upstream
+# extraction is re-run with different settings.
+
+paths:
+  source_root: data/cycle_features      # <root>/<subject>/<region>/*.csv
+  trial_metadata: data/trial_metadata   # *_trial_metadata.csv, one per subject
+  warehouse_dir: warehouse
+  parquet_root: warehouse/lake
+  duckdb_path: warehouse/theta.duckdb
+  export_dir: warehouse/exports
+
+signal:
+  fs: 400                      # Hz, from RunBycycle.py
+  f_theta: [3, 7]              # Hz, bycycle analysis band
+  f_lowpass: 30                # Hz, pre-filter cutoff
+  epoch_window_s: [-0.3, 2.8]  # maintenance-period window used for extraction
+
+bycycle_thresholds:
+  amp_fraction_threshold: 0.2
+  amp_consistency_threshold: 0.1
+  period_consistency_threshold: 0.4
+  monotonicity_threshold: 0.4
+  min_n_cycles: 3
+
+analysis:
+  burst_only: true             # restrict to cycles bycycle labelled as part of a burst
+  metrics: [time_ptsym, time_rdsym]
+  conditions:
+    baseline: 1                # load 1
+    comparison: 3              # load 3
+  min_cycles_per_channel_load: 10
+  n_permutations: 10000
+  random_seed: 20240115
+  symmetry_null_value: 0.5     # bycycle symmetry measures are 0.5 when symmetric
+
+dq:
+  max_null_fraction: 0.05
+  max_channel_dropout_fraction: 0.10
+  symmetry_bounds: [0.0, 1.0]
+  min_rows_per_file: 1
