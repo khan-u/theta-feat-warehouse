@@ -3,12 +3,13 @@ CONFIG ?= config/pipeline.yml
 NWB ?= ..
 export PYTHONPATH := src
 
-.PHONY: help install synth nwb test clean
+.PHONY: help install synth nwb airflow test clean
 
 help:
 	@echo "make install  - install dependencies"
 	@echo "make synth    - generate synthetic cycle-feature data"
 	@echo "make nwb      - extract cycle features from NWB files (NWB=<dir|file>)"
+	@echo "make airflow  - start a local Airflow with this DAG"
 	@echo "make test     - run unit tests"
 	@echo "make clean    - remove the warehouse and generated data"
 
@@ -20,6 +21,14 @@ synth:
 
 nwb:
 	$(PY) -m theta_warehouse.cli --config $(CONFIG) nwb $(NWB)
+
+airflow:
+	AIRFLOW_HOME=$(PWD)/airflow_home \
+	AIRFLOW__CORE__DAGS_FOLDER=$(PWD)/dags \
+	AIRFLOW__CORE__LOAD_EXAMPLES=False \
+	THETA_WAREHOUSE_CONFIG=$(PWD)/$(CONFIG) \
+	PYTHONPATH=$(PWD)/src \
+	$(PY) -m airflow standalone
 
 test:
 	$(PY) -m pytest tests -q
