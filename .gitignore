@@ -1,7 +1,17 @@
-.DS_Store
+# Generated data and warehouse (regenerate with `make demo`, `make full`, `make real`)
+data/cycle_features/
+data/trial_metadata/
+warehouse/
+airflow_home/
+
+# Locally built dashboard (regenerate with `make dashboard`)
+dashboard/index.html
+
+# Environments and caches
+.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
-.venv/
-warehouse/theta.duckdb
-airflow_home/
+
+# Housekeeping
+.DS_Store
