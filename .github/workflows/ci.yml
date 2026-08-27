@@ -55,6 +55,12 @@ jobs:
       - name: Run tests
         run: make test PY=python
 
+      # Ingest the committed example FASTQ into the genomics lake and run the
+      # read-quality gate. Uses only duckdb + PyYAML from the lean install, so a
+      # regression in the FASTQ path fails here rather than passing quietly.
+      - name: FASTQ ingestion smoke test
+        run: make fastq-demo PY=python
+
   # End-to-end smoke test on synthetic data: synth -> run-all -> dashboard.
   # `run-all` runs the data-quality gate, and the CLI exits 3 on
   # DataQualityError, so a DQ regression fails this job rather than passing

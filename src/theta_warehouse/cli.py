@@ -16,6 +16,7 @@ from pathlib import Path
 
 from . import dq as dq_module
 from . import export as export_module
+from . import fastq_dq, fastq_source
 from . import ingest, transform
 from . import nwb_source
 from .config import Config, load_config
@@ -123,6 +124,49 @@ def cmd_nwb(args: argparse.Namespace, config: Config) -> int:
         config.paths.source_root,
     )
     return 0 if processed > 0 else 1
+
+
+def cmd_fastq(args: argparse.Namespace, config: Config) -> int:
+    """Ingest FASTQ reads into the genomics lake and run the read-quality gate.
+
+    Reduces each read to per-read metrics, writes one Parquet partition per
+    sample, then runs the FASTQ data-quality checks over the lake and prints a
+    per-sample summary served from DuckDB. A blocking check raises
+    DataQualityError, which ``main`` turns into exit code 3, so a bad ingest
+    fails a scripted run the same way the theta gate does.
+    """
+    paths = [Path(entry) for entry in args.paths]
+    files = fastq_source.discover_fastq_files(paths)
+    if not files:
+        LOG.error("no FASTQ files found in: %s", ", ".join(args.paths))
+        return 2
+
+    result = fastq_source.ingest_fastq(
+        config.genomics,
+        paths,
+        sample_id=args.sample,
+        run_id=args.run_id,
+        max_reads=args.max_reads,
+    )
+    LOG.info("ingested %s", result.summary())
+
+    outcomes = fastq_dq.run_fastq_checks(
+        config.genomics, config.genomics.fastq_parquet_root, raise_on_error=not args.no_fail
+    )
+    print(dq_module.format_outcomes(outcomes))
+
+    for sample_id, n_reads, mean_length, mean_gc, mean_phred in fastq_dq.summarize_lake(
+        config.genomics, config.genomics.fastq_parquet_root
+    ):
+        LOG.info(
+            "sample %s: %d reads, mean length %.1f, mean GC %.3f, mean Phred %.1f",
+            sample_id,
+            n_reads,
+            mean_length,
+            mean_gc,
+            mean_phred,
+        )
+    return 0
 
 
 def cmd_init(args: argparse.Namespace, config: Config) -> int:
@@ -297,6 +341,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     nwb.add_argument("--max-trials", type=int, default=None, help="cap trials per file (for a quick run)")
     nwb.add_argument("--extracted-at", default=None, help="ISO timestamp base for feature filenames")
+
+    fastq = add("fastq", cmd_fastq, "ingest FASTQ reads and run the read-quality gate")
+    fastq.add_argument("paths", nargs="+", help="FASTQ files or directories (.fastq/.fq, optionally .gz)")
+    fastq.add_argument("--sample", default=None, help="sample id for the partition (default: filename)")
+    fastq.add_argument("--max-reads", type=int, default=None, help="cap reads ingested (for a quick run)")
+    fastq.add_argument("--run-id", default=None)
+    fastq.add_argument(
+        "--no-fail", action="store_true", help="record QC failures without a non-zero exit"
+    )
 
     add("init", cmd_init, "create schemas and operational tables")
 

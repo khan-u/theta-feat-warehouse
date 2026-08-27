@@ -41,7 +41,7 @@ def test_missing_required_command_raises():
 
 
 def test_all_commands_are_registered():
-    expected = {"synth", "nwb", "init", "discover", "load", "transform", "dq", "analyze", "export", "run-all"}
+    expected = {"synth", "nwb", "fastq", "init", "discover", "load", "transform", "dq", "analyze", "export", "run-all"}
     parser = build_parser()
     subactions = {
         a.dest: [c for c in a.choices]

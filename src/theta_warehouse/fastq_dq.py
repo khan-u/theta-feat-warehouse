@@ -92,10 +92,10 @@ def _connect_reads(lake_root: Path):
         # read_parquet inside CREATE VIEW cannot take a bound parameter, so the
         # file list is inlined as a SQL literal. The paths are config-derived,
         # never user input, and any embedded quote is escaped by the helper.
+        # sample_id is stored in each row, so hive partitioning is not needed to
+        # recover it and would only duplicate the column.
         file_list = "[" + ", ".join(sql_string_literal(str(p)) for p in parquet_files) + "]"
-        connection.execute(
-            f"CREATE VIEW reads AS SELECT * FROM read_parquet({file_list}, hive_partitioning = true)"
-        )
+        connection.execute(f"CREATE VIEW reads AS SELECT * FROM read_parquet({file_list})")
     else:
         ddl = ", ".join(f"{name} {sql_type}" for name, sql_type in READ_METRICS_COLUMNS)
         connection.execute(f"CREATE TABLE reads ({ddl})")
@@ -137,3 +137,29 @@ def run_fastq_checks(
         )
 
     return outcomes
+
+
+def summarize_lake(genomics: Genomics, lake_root: Path) -> list[tuple]:
+    """Per-sample serving summary read straight from the Parquet lake.
+
+    A small aggregate that demonstrates the warehouse read path: it is served
+    from DuckDB over the columnar lake, reading only the four columns it needs.
+    """
+    if not sorted(Path(lake_root).rglob("*.parquet")):
+        return []
+    connection = _connect_reads(lake_root)
+    try:
+        return connection.execute(
+            """
+            SELECT sample_id,
+                   COUNT(*)                  AS n_reads,
+                   ROUND(AVG(seq_length), 1) AS mean_length,
+                   ROUND(AVG(gc_content), 3) AS mean_gc,
+                   ROUND(AVG(mean_phred), 1) AS mean_phred
+            FROM reads
+            GROUP BY sample_id
+            ORDER BY sample_id
+            """
+        ).fetchall()
+    finally:
+        connection.close()
