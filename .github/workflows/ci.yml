@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to the same branch supersedes the previous run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONPATH: src
+
+jobs:
+  # Unit tests. Every heavy dependency in requirements.txt (apache-airflow,
+  # pynwb/h5py, bycycle, neurodsp) is imported lazily inside the function that
+  # needs it, so the suite runs against a lean install. Installing the full
+  # requirements.txt here would add several minutes for no extra coverage.
+  test:
+    name: tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # Bounds mirror requirements.txt: numpy and pandas are held below their
+      # next majors because the bycycle ingestion path needs pre-3.0 pandas
+      # writable-array behaviour. Keep these in sync with requirements.txt.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            'duckdb>=1.1.0' \
+            'numpy>=1.26,<2.1' \
+            'PyYAML>=6.0' \
+            'pytest>=8.0' \
+            'scipy>=1.11'
+
+      - name: Run tests
+        run: make test PY=python
+
+  # End-to-end smoke test on synthetic data: synth -> run-all -> dashboard.
+  # `run-all` runs the data-quality gate, and the CLI exits 3 on
+  # DataQualityError, so a DQ regression fails this job rather than passing
+  # quietly. Needs no real dataset and no credentials.
+  smoke:
+    name: smoke (make demo)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install pipeline dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            'duckdb>=1.1.0' \
+            'numpy>=1.26,<2.1' \
+            'PyYAML>=6.0' \
+            'scipy>=1.11'
+
+      - name: Run the synthetic end-to-end demo
+        run: make demo PY=python
+
+      # The dashboard and CSV extracts are gitignored build products. Keeping
+      # them per-run makes a failing DQ check inspectable after the fact.
+      - name: Upload dashboard and exports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-output
+          path: |
+            dashboard/index.html
+            warehouse/exports/
+          if-no-files-found: warn
+          retention-days: 14
