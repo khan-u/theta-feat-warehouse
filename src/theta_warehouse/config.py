@@ -74,12 +74,30 @@ class DataQuality:
 
 
 @dataclass(frozen=True)
+class Genomics:
+    """Settings for the FASTQ ingestion path.
+
+    A separate lake from the theta cycle features: sequencing reads are their own
+    grain, so they get their own Parquet root rather than being forced into the
+    cycle fact table. The phred offset and bounds record the encoding the quality
+    gate assumes, the same way the signal block records the extraction parameters.
+    """
+
+    fastq_parquet_root: Path
+    phred_offset: int
+    phred_max: int
+    min_reads: int
+    allowed_bases: str
+
+
+@dataclass(frozen=True)
 class Config:
     paths: Paths
     signal: Signal
     thresholds: BycycleThresholds
     analysis: Analysis
     dq: DataQuality
+    genomics: Genomics
 
     @property
     def sql_context(self) -> dict[str, str]:
@@ -175,10 +193,34 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         min_rows_per_file=int(dq_cfg["min_rows_per_file"]),
     )
 
+    # The genomics block is optional: a config written before the FASTQ path
+    # existed still loads, falling back to Sanger phred encoding and the default
+    # lake location under the warehouse directory.
+    genomics_cfg = data.get("genomics", {}) or {}
+    genomics = Genomics(
+        fastq_parquet_root=_resolve(
+            project_root, genomics_cfg.get("fastq_parquet_root", "warehouse/genomics_lake")
+        ),
+        phred_offset=int(genomics_cfg.get("phred_offset", 33)),
+        phred_max=int(genomics_cfg.get("phred_max", 45)),
+        min_reads=int(genomics_cfg.get("min_reads", 1)),
+        allowed_bases=str(genomics_cfg.get("allowed_bases", "ACGTN")).upper(),
+    )
+    if genomics.phred_offset not in (33, 64):
+        raise ValueError(
+            f"phred_offset must be 33 (Sanger/Illumina 1.8+) or 64 (legacy Illumina), "
+            f"got {genomics.phred_offset}"
+        )
+    if genomics.phred_max <= 0:
+        raise ValueError("phred_max must be positive")
+    if not genomics.allowed_bases:
+        raise ValueError("allowed_bases must be non-empty")
+
     return Config(
         paths=paths,
         signal=signal,
         thresholds=thresholds,
         analysis=analysis,
         dq=dq,
+        genomics=genomics,
     )

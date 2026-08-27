@@ -61,3 +61,41 @@ def test_low_n_permutations_raises(tmp_path):
     cfg = _write_config(tmp_path, {"n_permutations: 10000": "n_permutations: 500"})
     with pytest.raises(ValueError, match="n_permutations"):
         load_config(cfg)
+
+
+def test_genomics_defaults_when_section_absent(tmp_path):
+    # The base config has no genomics block, so a config predating the FASTQ
+    # path must still load with Sanger defaults.
+    cfg = _write_config(tmp_path, {})
+    config = load_config(cfg)
+    assert config.genomics.phred_offset == 33
+    assert config.genomics.allowed_bases == "ACGTN"
+    assert config.genomics.fastq_parquet_root.name == "genomics_lake"
+
+
+def test_genomics_section_is_parsed(tmp_path):
+    cfg = _write_config(
+        tmp_path,
+        {
+            "min_rows_per_file: 1": (
+                "min_rows_per_file: 1\n\n"
+                "genomics:\n"
+                "  phred_offset: 64\n"
+                "  phred_max: 41\n"
+                "  allowed_bases: acgt\n"
+            )
+        },
+    )
+    config = load_config(cfg)
+    assert config.genomics.phred_offset == 64
+    assert config.genomics.phred_max == 41
+    assert config.genomics.allowed_bases == "ACGT"  # normalised to upper-case
+
+
+def test_invalid_phred_offset_raises(tmp_path):
+    cfg = _write_config(
+        tmp_path,
+        {"min_rows_per_file: 1": "min_rows_per_file: 1\n\ngenomics:\n  phred_offset: 50\n"},
+    )
+    with pytest.raises(ValueError, match="phred_offset"):
+        load_config(cfg)
