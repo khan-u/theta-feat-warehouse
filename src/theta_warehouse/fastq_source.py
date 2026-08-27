@@ -21,8 +21,21 @@ reports the reason and the ingest step counts and drops them, the same way
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import gzip
+import shutil
+import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Iterable, Iterator
+
+from .config import Genomics
+from .db import sql_string_literal
+
+# Extensions treated as FASTQ, plain or gzip-compressed. ENA/SRA distribute reads
+# gzip-compressed, so .gz is the common case rather than the exception.
+FASTQ_SUFFIXES: tuple[str, ...] = (".fastq", ".fq", ".fastq.gz", ".fq.gz")
 
 # The per-read metric contract written to the Parquet lake, in emitted order.
 # Lineage columns (sample_id, source_file, run_id, ingested_at) are added by the
@@ -170,3 +183,171 @@ def compute_metrics(record: FastqRecord, offset: int) -> ReadMetrics:
         min_phred=min(scores) if scores else 0,
         max_phred=max(scores) if scores else 0,
     )
+
+
+# ------------------------------------------------------------------ file input
+
+
+def _has_fastq_suffix(name: str) -> bool:
+    lowered = name.lower()
+    return any(lowered.endswith(suffix) for suffix in FASTQ_SUFFIXES)
+
+
+def discover_fastq_files(paths: list[Path]) -> list[Path]:
+    """Expand file and directory arguments into a sorted, de-duplicated list.
+
+    Directories are searched recursively so a run folder can be pointed at
+    directly. Mirrors ``nwb_source.discover_lfp_files`` for the FASTQ suffixes.
+    """
+    found: list[Path] = []
+    for entry in paths:
+        entry = entry.expanduser()
+        if entry.is_dir():
+            found.extend(p for p in sorted(entry.rglob("*")) if p.is_file() and _has_fastq_suffix(p.name))
+        elif entry.is_file() and _has_fastq_suffix(entry.name):
+            found.append(entry)
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in found:
+        resolved = str(path.resolve())
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(path)
+    return unique
+
+
+@contextmanager
+def open_reads(path: Path):
+    """Open a FASTQ file as text, transparently decompressing ``.gz``."""
+    if path.name.lower().endswith(".gz"):
+        handle = gzip.open(path, "rt", encoding="utf-8")
+    else:
+        handle = path.open("r", encoding="utf-8")
+    try:
+        yield handle
+    finally:
+        handle.close()
+
+
+def iter_records(path: Path) -> Iterator[FastqRecord]:
+    """Yield FastqRecords from one FASTQ file (plain or gzip)."""
+    with open_reads(path) as handle:
+        yield from parse_fastq(handle)
+
+
+def _sample_id_from_path(path: Path) -> str:
+    """Strip FASTQ suffixes from a filename to use as a sample identifier."""
+    name = path.name
+    for suffix in sorted(FASTQ_SUFFIXES, key=len, reverse=True):
+        if name.lower().endswith(suffix):
+            return name[: -len(suffix)]
+    return path.stem
+
+
+@dataclass
+class IngestResult:
+    sample_id: str
+    parquet_path: Path
+    reads_written: int = 0
+    reads_skipped: int = 0
+    source_files: list[str] = field(default_factory=list)
+    first_skip_reason: str | None = None
+
+    def summary(self) -> dict[str, object]:
+        summary: dict[str, object] = {
+            "sample_id": self.sample_id,
+            "reads_written": self.reads_written,
+            "reads_skipped": self.reads_skipped,
+            "files": len(self.source_files),
+        }
+        if self.first_skip_reason is not None:
+            summary["first_skip_reason"] = self.first_skip_reason
+        return summary
+
+
+def _partition_dir(genomics: Genomics, sample_id: str) -> Path:
+    return genomics.fastq_parquet_root / f"sample_id={sample_id}"
+
+
+def ingest_fastq(
+    genomics: Genomics,
+    paths: list[Path],
+    sample_id: str | None = None,
+    run_id: str | None = None,
+    max_reads: int | None = None,
+    ingested_at: datetime | None = None,
+) -> IngestResult:
+    """Reduce FASTQ files to per-read metrics and write one Parquet partition.
+
+    Metrics are computed here in Python, then bulk-inserted into a DuckDB
+    in-memory table and written to Parquet with ``COPY``. This keeps the write
+    columnar and typed without a pandas dependency, and sorting by ``seq_length``
+    puts similar-length reads in contiguous row groups so length predicates prune
+    by row-group statistics, the same approach the cycle-feature loader uses for
+    channels. Writing is delete-then-write at partition grain, so a re-run
+    replaces exactly this sample and leaves other samples untouched.
+    """
+    import duckdb
+
+    files = discover_fastq_files(paths)
+    if not files:
+        raise FileNotFoundError(f"no FASTQ files found in: {', '.join(str(p) for p in paths)}")
+
+    sample_id = sample_id or _sample_id_from_path(files[0])
+    run_id = run_id or f"local__{uuid.uuid4().hex[:12]}"
+    ingested_at = ingested_at or datetime.now(timezone.utc)
+    offset = genomics.phred_offset
+
+    result = IngestResult(sample_id=sample_id, parquet_path=Path())
+    rows: list[tuple[object, ...]] = []
+    reached_cap = False
+    for path in files:
+        result.source_files.append(str(path))
+        for record in iter_records(path):
+            if max_reads is not None and result.reads_written >= max_reads:
+                reached_cap = True
+                break
+            reason = validate_record(record, genomics.allowed_bases)
+            if reason is not None:
+                result.reads_skipped += 1
+                if result.first_skip_reason is None:
+                    result.first_skip_reason = reason
+                continue
+            metrics = compute_metrics(record, offset)
+            rows.append(metrics.as_row() + (sample_id, str(path), run_id, ingested_at))
+            result.reads_written += 1
+        if reached_cap:
+            break
+
+    target_dir = _partition_dir(genomics, sample_id)
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_file = target_dir / "part-0.parquet"
+    result.parquet_path = target_file
+
+    all_columns = list(READ_METRICS_COLUMNS) + [
+        ("sample_id", "VARCHAR"),
+        ("source_file", "VARCHAR"),
+        ("run_id", "VARCHAR"),
+        ("ingested_at", "TIMESTAMP"),
+    ]
+    ddl = ", ".join(f"{name} {sql_type}" for name, sql_type in all_columns)
+    placeholders = ", ".join(["?"] * len(all_columns))
+
+    connection = duckdb.connect()
+    try:
+        connection.execute("SET TimeZone = 'UTC'")
+        connection.execute(f"CREATE TABLE reads ({ddl})")
+        if rows:
+            connection.executemany(f"INSERT INTO reads VALUES ({placeholders})", rows)
+        connection.execute(
+            f"""
+            COPY (SELECT * FROM reads ORDER BY seq_length, read_id)
+            TO {sql_string_literal(str(target_file))} (FORMAT PARQUET, COMPRESSION ZSTD)
+            """
+        )
+    finally:
+        connection.close()
+
+    return result
