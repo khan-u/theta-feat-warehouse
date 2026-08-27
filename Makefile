@@ -1,11 +1,12 @@
 PY ?= python3
 CONFIG ?= config/pipeline.yml
 NWB ?= ..
+FASTQ ?= assets/example.fastq
 GAP ?= 0
 FAIL_DEMO ?=
 export PYTHONPATH := src
 
-.PHONY: help install synth demo accrual-demo accrual-real full real nwb pipeline dashboard test clean airflow
+.PHONY: help install synth demo accrual-demo accrual-real full real nwb fastq-demo pipeline dashboard test clean airflow
 
 help:
 	@echo "make install       - install dependencies"
@@ -15,6 +16,7 @@ help:
 	@echo "make full          - same at reference scale (32 subjects, 586 channels)"
 	@echo "make real          - ingest real SBCAT NWB LFP (NWB=<dir|file>), run pipeline, dashboard"
 	@echo "make nwb           - extract cycle features from NWB files only (NWB=<dir|file>)"
+	@echo "make fastq-demo    - ingest a FASTQ (FASTQ=<file|dir>) and run the read-quality gate"
 	@echo "make pipeline      - run the pipeline against existing data"
 	@echo "make dashboard     - build the offline HTML dashboard from the CSV extracts"
 	@echo "make test          - run unit tests"
@@ -52,6 +54,9 @@ real: clean
 
 nwb:
 	$(PY) -m theta_warehouse.cli --config $(CONFIG) nwb $(NWB)
+
+fastq-demo:
+	$(PY) -m theta_warehouse.cli --config $(CONFIG) fastq $(FASTQ)
 
 pipeline:
 	$(PY) -m theta_warehouse.cli --config $(CONFIG) run-all

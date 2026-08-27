@@ -112,6 +112,47 @@ accuracy come from the NWB `trials` table (`loads`, `response_accuracy`); the
 electrode `location` is condensed to a region code (`Hipp`, `Amg`, `dACC`,
 `preSMA`, `vmPFC`). And files without a continuous `LFPs` series are skipped with a logged reason.
 
+## Genomics: FASTQ ingestion (Zarr/FASTQ-class formats)
+
+The same lakehouse pattern carries to a second scientific format. `fastq` reduces
+raw sequencing reads to a per-read metrics table in a separate Parquet lake, then
+runs a data-quality gate over it. FASTQ is the community standard for sequencing
+reads: four lines per read, a base sequence and a per-base quality string whose
+characters encode Phred scores as `ord(char) - phred_offset` (33 for Sanger /
+Illumina 1.8+).
+
+```bash
+# Fetch a public run by accession from the ENA. The accession is a persistent
+# identifier, the FAIR analogue of the DANDI id above; copy the exact FASTQ URL
+# from the run's ENA record page (https://www.ebi.ac.uk/ena/browser/view/SRRXXXXXXX).
+curl -L -o SRRXXXXXXX.fastq.gz "<FASTQ URL from the ENA record>"
+python -m theta_warehouse.cli fastq SRRXXXXXXX.fastq.gz   # or: make fastq-demo FASTQ=SRRXXXXXXX.fastq.gz
+```
+
+`make fastq-demo` runs the same path on the committed `assets/example.fastq`, a
+handful of synthetic reads for the demo and CI (illustrative, not real sequencing
+data).
+
+Each read is reduced to `read_id, seq_length, gc_content, n_bases, mean_phred,
+min_phred, max_phred` and written to
+`warehouse/genomics_lake/sample_id=<sample>/part-0.parquet` (ZSTD), sorted by
+`seq_length` so row-group statistics prune length predicates, the same approach
+the cycle-feature lake uses for channels. Malformed reads (quality/sequence length
+mismatch, or a base outside `allowed_bases`) are dropped at parse and counted.
+`fastq_dq` then runs over the lake, served from DuckDB:
+
+| Check | Severity | Catches |
+| --- | --- | --- |
+| `fastq_not_empty` | error | ingestion produced nothing usable |
+| `read_length_positive` | error | a non-positive read length |
+| `phred_in_range` | error | quality encoding not matching `phred_offset` |
+| `gc_content_in_unit_interval` | error | a GC value outside [0, 1] (mapping error) |
+| `mean_quality_reasonable` | warn | mean base quality below Phred 20 |
+
+Encoding and bounds live in the `genomics` block of `config/pipeline.yml`
+(`phred_offset`, `phred_max`, `allowed_bases`), the same way the `signal` block
+records the parameters the cycle features were produced under.
+
 ## Layers
 
 | Layer | Contents |
@@ -219,6 +260,7 @@ single DuckDB file and concurrent writers would corrupt it.
 ```bash
 python -m theta_warehouse.cli synth --profile full --effect 0.02
 python -m theta_warehouse.cli nwb /path/to/000673   #  LFP -> CSV contract
+python -m theta_warehouse.cli fastq reads.fastq.gz  #  reads -> per-read metrics lake
 python -m theta_warehouse.cli discover
 python -m theta_warehouse.cli load
 python -m theta_warehouse.cli transform
@@ -251,6 +293,8 @@ theta-feat-warehouse/
 │   ├── export.py                  # Tableau extracts
 │   ├── synth.py                   # synthetic data tool
 │   ├── nwb_source.py              # SBCAT NWB → CSV bridge (DANDI 000673)
+│   ├── fastq_source.py            # FASTQ → per-read metrics Parquet lake
+│   ├── fastq_dq.py                # data-quality gate for the read-metrics lake
 │   └── cli.py
 ├── matlab/export_trialinfo.m      # exports the load condition from trialinfo (MATLAB path)
 ├── dashboard/
@@ -266,11 +310,11 @@ theta-feat-warehouse/
 make test
 ```
 
-97 tests covering the permutation null calibration
+The suite covers the permutation null calibration
 (false-positive rate near alpha across 200 replicates, rather than a single seeded
 p-value), agreement with `scipy.stats.ttest_rel`
-on Gaussian differences, and byte-level fidelity of the synthetic data to
-the real CSV format.
+on Gaussian differences, byte-level fidelity of the synthetic data to
+the real CSV format, and the FASTQ parsing, ingestion and quality gate.
 
 ## Credits
 

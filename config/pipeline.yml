@@ -42,3 +42,13 @@ dq:
   max_channel_dropout_fraction: 0.10
   symmetry_bounds: [0.0, 1.0]
   min_rows_per_file: 1
+
+# Genomics FASTQ ingestion. A separate lake from the cycle features: sequencing
+# reads are their own grain. Phred offset and bounds record the quality encoding
+# the FASTQ data-quality gate assumes.
+genomics:
+  fastq_parquet_root: warehouse/genomics_lake  # per-read metrics Parquet lake
+  phred_offset: 33            # ASCII offset; 33 = Sanger/Illumina 1.8+
+  phred_max: 45               # phred scores above this fail the quality gate
+  min_reads: 1                # minimum reads for an ingest to be usable
+  allowed_bases: ACGTN        # bases accepted in a read; others are malformed
