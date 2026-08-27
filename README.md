@@ -1,5 +1,7 @@
 # theta-feat-warehouse
 
+[![CI](https://github.com/khan-u/theta-feat-warehouse/actions/workflows/ci.yml/badge.svg)](https://github.com/khan-u/theta-feat-warehouse/actions/workflows/ci.yml)
+
 This repo is an Airflow-orchestrated ELT warehouse and analysis layer over the cycle-level
 theta features produced by [`eeg-feat-ext`](https://github.com/khan-u/eeg-feat-ext).
 
