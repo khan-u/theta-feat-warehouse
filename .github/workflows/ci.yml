@@ -88,7 +88,7 @@ jobs:
       # them per-run makes a failing DQ check inspectable after the fact.
       - name: Upload dashboard and exports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: demo-output
           path: |
