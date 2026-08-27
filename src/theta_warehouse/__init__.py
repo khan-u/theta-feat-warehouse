@@ -10,6 +10,8 @@ __all__ = [
     "db",
     "dq",
     "export",
+    "fastq_dq",
+    "fastq_source",
     "ingest",
     "naming",
     "nwb_source",

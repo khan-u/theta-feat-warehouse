@@ -14,6 +14,10 @@ h5py>=3.9
 bycycle>=1.0
 neurodsp>=2.2
 
+# Genomics FASTQ ingestion (the `fastq` command) parses reads and writes a
+# per-read Parquet lake using only the standard library and duckdb (above), so
+# it needs no extra dependency and runs under the lean CI install.
+
 # Orchestration (not needed for the CLI path). Airflow 2.x supports Python
 # 3.10-3.12; the recommended environment for the full stack is Python 3.11.
 apache-airflow>=2.9,<3.0
