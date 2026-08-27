@@ -314,7 +314,10 @@ def ingest_fastq(
                     result.first_skip_reason = reason
                 continue
             metrics = compute_metrics(record, offset)
-            rows.append(metrics.as_row() + (sample_id, str(path), run_id, ingested_at))
+            # Provenance records the source filename, not the absolute path: the
+            # name identifies the run for lineage, while the full path is
+            # machine-specific and would travel with the lake if it were shared.
+            rows.append(metrics.as_row() + (sample_id, path.name, run_id, ingested_at))
             result.reads_written += 1
         if reached_cap:
             break

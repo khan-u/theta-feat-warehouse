@@ -61,6 +61,19 @@ def test_ingest_writes_parquet_roundtrip(tmp_path):
     assert by_len[6] == pytest.approx(4 / 6)  # GGCCAA -> G,G,C,C
 
 
+def test_ingest_provenance_is_filename_not_path(tmp_path):
+    # The source_file column must record the filename only, never the absolute
+    # path, so the lake carries no machine-specific location if it is shared.
+    src = tmp_path / "sample.fastq"
+    src.write_text(_fastq_text([("ACGT", "IIII")]))
+    result = ingest_fastq(_genomics(tmp_path), [src])
+    source_files = duckdb.connect().execute(
+        "SELECT DISTINCT source_file FROM read_parquet(?)", [str(result.parquet_path)]
+    ).fetchall()
+    assert source_files == [("sample.fastq",)]
+    assert all("/" not in row[0] for row in source_files)
+
+
 def test_ingest_skips_malformed_reads(tmp_path):
     src = tmp_path / "sample.fastq"
     # second read has an invalid base 'X'; it must be counted and dropped.
